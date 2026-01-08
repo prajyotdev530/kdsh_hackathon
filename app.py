@@ -68,7 +68,7 @@ def check_consistency():
         prediction = checker.check_consistency(book_name, character, statement)
 
         # Calculate confidence (simplified - you could enhance this)
-        avg_similarity = sum(chunk['similarity'] for chunk in relevant_chunks) / len(relevant_chunks) if relevant_chunks else 0.0
+        avg_similarity = sum(float(chunk['similarity']) for chunk in relevant_chunks) / len(relevant_chunks) if relevant_chunks else 0.0
         confidence = min(0.95, avg_similarity * 1.2)  # Scale similarity to confidence
 
         # Prepare response
