@@ -4,6 +4,7 @@
 
 import pathway as pw
 from sentence_transformers import SentenceTransformer
+import re
 
 # -----------------------------------------------------
 # CONFIGURATION
@@ -73,9 +74,20 @@ chunks = chunks.flatten(pw.this.chunk_text)
 # STEP 3: Extract character mentions
 # -----------------------------------------------------
 
+def extract_characters(text: str):
+    text_lower = text.lower()
+    found = []
+
+    for character in CHARACTER_LIST:
+        pattern = r"\b" + re.escape(character.lower()) + r"\b"
+        if re.search(pattern, text_lower):
+            found.append(character)
+
+    return list(set(found))
+
 chunks = chunks.with_columns(
     characters=pw.apply(
-        lambda text: [c for c in CHARACTER_LIST if c in text],
+        extract_characters,
         pw.this.chunk_text
     )
 )
@@ -112,4 +124,12 @@ pw.debug.compute_and_print(vector_store)
 # STEP 7: Run Pathway
 # -----------------------------------------------------
 
+chunk_counts = vector_store.groupby(
+    vector_store.book_name
+).reduce(
+    book_name=pw.this.book_name,
+    num_chunks=pw.reducers.count()
+)
+
+pw.debug.compute_and_print(chunk_counts)
 pw.run()
