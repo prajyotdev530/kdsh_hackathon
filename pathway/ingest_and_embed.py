@@ -86,8 +86,8 @@ vector_store = chunks.select(
     embedding=pw.this.embedding
 )
 
-pw.io.parquet.write(
-    vector_store,"./vector_store"
+pw.io.fs.write(
+    vector_store,"./vector_store",format="json"
 )
 
 # -----------------------------------------------------
