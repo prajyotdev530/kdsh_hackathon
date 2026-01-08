@@ -50,5 +50,5 @@ print(f"Total chunks created: {len(result)}")
 print(f"\n--- Sample Chunks ---")
 for i in range(min(3, len(result))):
     print(f"\nChunk {i+1} (origin: {result.iloc[i]['_origin_id']}):")
-    print(f"Text: {result.iloc[i]['text'][:150]}...")
+    print(f"Text: {result.iloc[i]['text'][:300]}...")
     print(f"Metadata: {result.iloc[i]['metadata']}")
