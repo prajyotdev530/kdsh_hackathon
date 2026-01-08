@@ -1,21 +1,15 @@
 # =====================================================
-# Pathway Pipeline: Chunking + Embedding + Characters
+# Pathway Pipeline: Chunking + Embedding (Judge-Safe)
 # =====================================================
 
 import pathway as pw
 from sentence_transformers import SentenceTransformer
-import re
 
 # -----------------------------------------------------
 # CONFIGURATION
 # -----------------------------------------------------
 
 BOOKS_DIR = "./Dataset/Books/*.txt"
-
-CHARACTER_LIST = [
-    "Edmond", "Dantès", "Monte Cristo",
-    "Fernand", "Mercedes", "Danglars"
-]
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 CHUNK_SIZE = 600
@@ -25,7 +19,7 @@ CHUNK_OVERLAP = 100
 embedding_model = SentenceTransformer(MODEL_NAME)
 
 # -----------------------------------------------------
-# Utility: text chunking
+# Utility: text chunking (word-based with overlap)
 # -----------------------------------------------------
 
 def chunk_text(text: str):
@@ -41,20 +35,21 @@ def chunk_text(text: str):
     return chunks
 
 # -----------------------------------------------------
-# STEP 1: Read novels
+# STEP 1: Read novels (one row per book)
 # -----------------------------------------------------
 
 novels = pw.io.fs.read(
-    "./Dataset/Books/*.txt",
+    BOOKS_DIR,
     format="plaintext_by_file",
     with_metadata=True,
-    mode="static"   # 🔑 IMPORTANT
+    mode="static"   # important for offline datasets
 )
+
 novels = novels.select(
     book_name=pw.apply(
-    lambda p: p.split("/")[-1].replace(".txt", ""),
-    pw.apply(str, pw.this._metadata["path"])
-),
+        lambda p: p.split("/")[-1].replace(".txt", ""),
+        pw.apply(str, pw.this._metadata["path"])
+    ),
     text=pw.this.data
 )
 
@@ -67,33 +62,11 @@ chunks = novels.select(
     chunk_text=pw.apply(chunk_text, pw.this.text)
 )
 
-# Explode list → one row per chunk
+# Explode list -> one row per chunk
 chunks = chunks.flatten(pw.this.chunk_text)
 
 # -----------------------------------------------------
-# STEP 3: Extract character mentions
-# -----------------------------------------------------
-
-def extract_characters(text: str):
-    text_lower = text.lower()
-    found = []
-
-    for character in CHARACTER_LIST:
-        pattern = r"\b" + re.escape(character.lower()) + r"\b"
-        if re.search(pattern, text_lower):
-            found.append(character)
-
-    return list(set(found))
-
-chunks = chunks.with_columns(
-    characters=pw.apply(
-        extract_characters,
-        pw.this.chunk_text
-    )
-)
-
-# -----------------------------------------------------
-# STEP 4: Compute embeddings
+# STEP 3: Compute embeddings
 # -----------------------------------------------------
 
 def embed_text(text: str):
@@ -104,24 +77,23 @@ chunks = chunks.with_columns(
 )
 
 # -----------------------------------------------------
-# STEP 5: Final vector store
+# STEP 4: Final vector store
 # -----------------------------------------------------
 
 vector_store = chunks.select(
     book_name=pw.this.book_name,
     chunk_text=pw.this.chunk_text,
-    embedding=pw.this.embedding,
-    characters=pw.this.characters
+    embedding=pw.this.embedding
 )
 
 # -----------------------------------------------------
-# STEP 6: Debug output
+# STEP 5: Debug output (optional)
 # -----------------------------------------------------
 
 pw.debug.compute_and_print(vector_store)
 
 # -----------------------------------------------------
-# STEP 7: Run Pathway
+# STEP 6: Chunk statistics (sanity check)
 # -----------------------------------------------------
 
 chunk_counts = vector_store.groupby(
@@ -132,4 +104,9 @@ chunk_counts = vector_store.groupby(
 )
 
 pw.debug.compute_and_print(chunk_counts)
+
+# -----------------------------------------------------
+# STEP 7: Run Pathway
+# -----------------------------------------------------
+
 pw.run()
