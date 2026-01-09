@@ -16,12 +16,12 @@ from pathlib import Path
 # CONFIG
 # =====================================================
 
-INPUT_CSV = "trained_with_claims.csv"
-OUTPUT_CSV = "trained_with_claims_and_contradictions.csv"
+INPUT_CSV = "./Dataset/train_with_claims.csv"
+OUTPUT_CSV = "./Dataset/trained_with_claims_and_contradictions.csv"
 MODEL = "gpt-4o-mini"
 NUM_CONTRADICTIONS = 3
 
-client = OpenAI()
+client = OpenAI(api_key="")
 
 # =====================================================
 # LLM CONTRADICTION GENERATION
@@ -41,6 +41,7 @@ Rules:
 - Must be plausible sentences from a novel
 - No explanations
 - Return ONLY valid JSON list of strings
+-See the novel name and make contradiction related to that novel
 
 CLAIM:
 "{claim_text}"
