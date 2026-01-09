@@ -19,8 +19,7 @@ INPUT_CSV = "./Dataset/train.csv"
 OUTPUT_CSV = "./Dataset/train_with_claims.csv"
 MIN_CLAIMS = 3
 
-# 🔑 OpenAI client
-#client = OpenAI(api_key="")
+
 
 MODEL_NAME = "gpt-4o-mini"
 
