@@ -12,8 +12,8 @@ from sentence_transformers import SentenceTransformer
 BOOKS_DIR = "./Dataset/Books/*.txt"
 
 MODEL_NAME = "all-MiniLM-L6-v2"
-CHUNK_SIZE = 400
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 20
+CHUNK_OVERLAP = 5
 
 # Load embedding model once
 embedding_model = SentenceTransformer(MODEL_NAME)
