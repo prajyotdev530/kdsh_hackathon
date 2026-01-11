@@ -6,7 +6,7 @@ from sentence_transformers import SentenceTransformer
 # =====================================================
 # CONFIGURATION
 # =====================================================
-VECTOR_STORE_PATH = "./vector_store.jsonl"
+VECTOR_STORE_PATH = "./vector_store"
 TRAIN_PATH = "./Dataset/train_with_claims_and_contradictions.csv"
 MODEL_NAME = "all-MiniLM-L6-v2"
 MAX_CLAIMS = 4
@@ -93,46 +93,63 @@ claims_expanded = train_claims.select(
 )
 
 # =====================================================
-# 3. CLAIM RETRIEVAL (Fixing the Join)
+# 3. CLAIM RETRIEVAL (HYBRID, TOP-60)
 # =====================================================
 
-# JOIN Step
 claim_matches = claims_expanded.join(
     vector_store,
     claims_expanded.book_name == vector_store.book_name,
     how=pw.JoinMode.INNER
 ).select(
-    # 🔑 FIXED: Use keyword args to explicitly name columns
     story_id=pw.this.left.story_id,
     claim_id=pw.this.left.claim_id,
     claim_text=pw.this.left.claim_text,
     chunk_text=pw.this.right.chunk_text,
-    score=pw.apply(cosine_sim, pw.this.left.claim_embedding, pw.this.right.embedding)
+
+    semantic_score=pw.apply(cosine_sim,
+        pw.this.left.claim_embedding,
+        pw.this.right.embedding
+    ),
+
+    lexical_score=pw.apply(bm25_like,
+        pw.this.left.claim_text,
+        pw.this.right.chunk_text
+    )
+).with_columns(
+    final_score=0.75 * pw.this.lexical_score + 0.25 * pw.this.semantic_score
 )
 
-# REDUCE Step (Find best chunk for Claim)
-best_claim_chunk = claim_matches.groupby(
+# Keep top-60 chunks per claim
+best_claim_chunks = claim_matches.groupby(
     pw.this.story_id, pw.this.claim_id
 ).reduce(
     pw.this.story_id,
     pw.this.claim_id,
     pw.this.claim_text,
-    claim_chunk=pw.reducers.argmax(pw.this.chunk_text, key=pw.this.score)
+    claim_chunks=pw.reducers.topk(
+        pw.struct(
+            chunk=pw.this.chunk_text,
+            score=pw.this.final_score
+        ),
+        key=pw.this.final_score,
+        k=60
+    )
 )
 
 # =====================================================
-# 4. CONTRADICTION RETRIEVAL
+# 4. CONTRADICTION RETRIEVAL (HYBRID, TOP-60)
 # =====================================================
 
-# 1. Explode Contradictions from the expanded claims
 contras_expanded = claims_expanded.select(
     pw.this.story_id,
     pw.this.book_name,
     pw.this.claim_id,
-    contra_text_list=pw.apply(explode_contradictions, pw.this.contradictions_json, pw.this.claim_id)
+    contra_text_list=pw.apply(explode_contradictions,
+        pw.this.contradictions_json,
+        pw.this.claim_id
+    )
 ).flatten(pw.this.contra_text_list)
 
-# 2. Embed Contradictions
 contras_embedded = contras_expanded.select(
     pw.this.story_id,
     pw.this.book_name,
@@ -141,49 +158,67 @@ contras_embedded = contras_expanded.select(
     contra_embedding=pw.apply(embed, pw.this.contra_text_list)
 )
 
-# 3. Join with Vector Store
 contra_matches = contras_embedded.join(
     vector_store,
     contras_embedded.book_name == vector_store.book_name,
     how=pw.JoinMode.INNER
 ).select(
-    # 🔑 FIXED: Keyword args here too
     story_id=pw.this.left.story_id,
     claim_id=pw.this.left.claim_id,
     contra_text=pw.this.left.contra_text,
     chunk_text=pw.this.right.chunk_text,
-    score=pw.apply(cosine_sim, pw.this.left.contra_embedding, pw.this.right.embedding)
+
+    semantic_score=pw.apply(cosine_sim,
+        pw.this.left.contra_embedding,
+        pw.this.right.embedding
+    ),
+
+    lexical_score=pw.apply(bm25_like,
+        pw.this.left.contra_text,
+        pw.this.right.chunk_text
+    )
+).with_columns(
+    final_score=0.75 * pw.this.lexical_score + 0.25 * pw.this.semantic_score
 )
 
-# 4. Reduce (Find best chunk for each Contradiction)
-best_contra_chunk = contra_matches.groupby(
-    pw.this.story_id, pw.this.claim_id, pw.this.contra_text
+best_contra_chunks = contra_matches.groupby(
+    pw.this.story_id,
+    pw.this.claim_id,
+    pw.this.contra_text
 ).reduce(
     pw.this.story_id,
     pw.this.claim_id,
     pw.this.contra_text,
-    contra_chunk=pw.reducers.argmax(pw.this.chunk_text, key=pw.this.score)
+    contra_chunks=pw.reducers.topk(
+        pw.struct(
+            chunk=pw.this.chunk_text,
+            score=pw.this.final_score
+        ),
+        key=pw.this.final_score,
+        k=60
+    )
 )
 
 # =====================================================
 # 5. FINAL AGGREGATION
 # =====================================================
 
-final_output = best_claim_chunk.join(
-    best_contra_chunk,
+final_output = best_claim_chunks.join(
+    best_contra_chunks,
     on=["story_id", "claim_id"],
     how=pw.JoinMode.LEFT
 ).groupby(
-    pw.this.story_id, pw.this.claim_id
+    pw.this.story_id,
+    pw.this.claim_id
 ).reduce(
     pw.this.story_id,
     pw.this.claim_id,
     pw.this.claim_text,
-    pw.this.claim_chunk,
+    pw.this.claim_chunks,
     contradiction_evidence=pw.reducers.collect(
         pw.struct(
             contradiction=pw.this.contra_text,
-            evidence=pw.this.contra_chunk
+            chunks=pw.this.contra_chunks
         )
     )
 )

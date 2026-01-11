@@ -1,25 +1,25 @@
 # =====================================================
-# Pathway Pipeline: Chunking + Embedding (Judge-Safe)
+# Pathway Pipeline: Chunking + Embedding + Characters
 # =====================================================
 
 import pathway as pw
 from sentence_transformers import SentenceTransformer
+import re
+from collections import Counter
 
 # -----------------------------------------------------
 # CONFIGURATION
 # -----------------------------------------------------
 
 BOOKS_DIR = "./Dataset/Books/*.txt"
-
 MODEL_NAME = "all-MiniLM-L6-v2"
 CHUNK_SIZE = 400
 CHUNK_OVERLAP = 100
 
-# Load embedding model once
 embedding_model = SentenceTransformer(MODEL_NAME)
 
 # -----------------------------------------------------
-# Utility: text chunking (word-based with overlap)
+# Utility: text chunking
 # -----------------------------------------------------
 
 def chunk_text(text: str):
@@ -35,38 +35,64 @@ def chunk_text(text: str):
     return chunks
 
 # -----------------------------------------------------
-# STEP 1: Read novels (one row per book)
+# Utility: extract character names (one time per book)
+# -----------------------------------------------------
+
+def extract_characters(full_text):
+    names = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', full_text)
+    counts = Counter(names)
+
+    blacklist = {
+        "The","Chapter","Monsieur","Madame","Count",
+        "Volume","Book","Part"
+    }
+
+    return sorted([
+        n for n,c in counts.items()
+        if c > 6 and n not in blacklist
+    ])
+
+# -----------------------------------------------------
+# STEP 1: Read novels
 # -----------------------------------------------------
 
 novels = pw.io.fs.read(
     BOOKS_DIR,
     format="plaintext_by_file",
     with_metadata=True,
-    mode="static"   # important for offline datasets
+    mode="static"
 )
 
 novels = novels.select(
     book_name=pw.apply(
-        lambda p: p.split("/")[-1].replace(".txt", ""),
+        lambda p: p.split("/")[-1].replace(".txt",""),
         pw.apply(str, pw.this._metadata["path"])
     ),
     text=pw.this.data
 )
 
 # -----------------------------------------------------
-# STEP 2: Chunk novels
+# STEP 2: Extract characters per book
+# -----------------------------------------------------
+
+novels = novels.with_columns(
+    characters=pw.apply(extract_characters, pw.this.text)
+)
+
+# -----------------------------------------------------
+# STEP 3: Chunk novels
 # -----------------------------------------------------
 
 chunks = novels.select(
     book_name=pw.this.book_name,
+    characters=pw.this.characters,
     chunk_text=pw.apply(chunk_text, pw.this.text)
 )
 
-# Explode list -> one row per chunk
 chunks = chunks.flatten(pw.this.chunk_text)
 
 # -----------------------------------------------------
-# STEP 3: Compute embeddings
+# STEP 4: Embeddings
 # -----------------------------------------------------
 
 def embed_text(text: str):
@@ -77,27 +103,50 @@ chunks = chunks.with_columns(
 )
 
 # -----------------------------------------------------
-# STEP 4: Final vector store
+# STEP 5: Character presence per chunk
 # -----------------------------------------------------
 
-vector_store = chunks.select(
+def character_presence(chunk, characters):
+    text = chunk.lower()
+    presence = {}
+
+    for name in characters:
+        found = 0
+        for part in name.lower().split():
+            if re.search(r'\b' + re.escape(part) + r'\b', text):
+                found = 1
+                break
+        presence[name.replace(" ","_")] = found
+
+    return presence
+
+chunks = chunks.with_columns(
+    char_map=pw.apply(character_presence, pw.this.chunk_text, pw.this.characters)
+)
+
+# Expand char_map into actual Pathway columns
+def explode_chars(row):
+    return row["char_map"]
+
+chunks = chunks.select(
     book_name=pw.this.book_name,
     chunk_text=pw.this.chunk_text,
-    embedding=pw.this.embedding
-)
-
-pw.io.fs.write(
-    vector_store,"./vector_store",format="json"
+    embedding=pw.this.embedding,
+    **pw.apply(explode_chars, pw.this)
 )
 
 # -----------------------------------------------------
-# STEP 5: Debug output (optional)
+# STEP 6: Final vector store
 # -----------------------------------------------------
+
+vector_store = chunks
+
+pw.io.fs.write(vector_store,"./vector_store",format="json")
 
 pw.debug.compute_and_print(vector_store)
 
 # -----------------------------------------------------
-# STEP 6: Chunk statistics (sanity check)
+# STEP 7: Chunk counts
 # -----------------------------------------------------
 
 chunk_counts = vector_store.groupby(
@@ -110,7 +159,7 @@ chunk_counts = vector_store.groupby(
 pw.debug.compute_and_print(chunk_counts)
 
 # -----------------------------------------------------
-# STEP 7: Run Pathway
+# STEP 8: Run
 # -----------------------------------------------------
 
 pw.run()
